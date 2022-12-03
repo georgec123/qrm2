@@ -3,6 +3,11 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize 
 import statsmodels.api as sm
 from preliminary import train
+from pyextremes import EVA
+model = EVA(data=train['Standardised residuals'].dropna())
+model.get_extremes("POT", threshold=-1, r="24H")
+model.plot_extremes(show_clusters=True)
+plot.show()
 
 v = np.linspace(-1, 5, 1000) # some values of v
 excess_mean = []
