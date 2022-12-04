@@ -1,24 +1,60 @@
 import numpy as np
 from arch import arch_model
-import statsmodels.api as sm
+import pandas as pd
+import datetime as dt
 from preliminary import train, test
-from iii import sol, u
-from plotting import print_viols_and_plot_GPD, print_viols_and_plot_normal
+from plotting import print_viols_and_plot_normal
 import statsmodels.api as sm
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
-def es(loss: np.ndarray, var: np.ndarray):
+def print_viols_and_plot_normal(df: pd.DataFrame, title: str):
     """
-    Calculate expected shortfall.
-    Takes array of length n+1, and calculates avg(loss) of first n items given loss[0:n]>var[-1]
-    :param loss: array of n+1 observations
-    :param var: array of n+1 observations, but we only care about the 'final' element 
+    Print summary of data including: 99 VaR violations, 95 VaR violations, and VaR/ES plot
     """
-    # check if loss[0 to n inclusive] > var[n+1]
-    loss = loss[:-1]
-    breach_mask = loss>var[-1]
-    if not breach_mask.sum():
-        return 0
-    return loss[breach_mask].sum() / breach_mask.sum()
+    data = df.copy()
+    data.dropna(inplace=True)
+    ylabel = "Daily portfolio loss (%) (positive part)"
+    
+    ################ plot main chart################
+    ax = data[['max_loss']].plot(c='orange', linewidth=0.5, figsize=(10, 6))
+    data[['VaR_95','ES_95','VaR_99','ES_99']].plot(ax=ax, style=['r--','r-','b--','b-'], linewidth=0.5)
+
+
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Time")
+    
+    months = mdates.MonthLocator((1,4,7,10))
+    ax.xaxis.set_minor_locator(months)
+    ax.xaxis.tick_bottom()
+    ax.yaxis.tick_left()
+    
+    ax.set_title(title)
+    ax.legend(loc='upper left')
+
+    plt.show()
+
+    ################ plot var viols ################
+    for idx, var in enumerate(['95', '99']):
+        ax = data[['max_loss']].plot(c='orange', linewidth=0.5, figsize=(10, 6))
+        ax = data[[f'VaR_{var}']].plot(ax=ax, style=['b--'], linewidth=0.5)
+
+        viols = data[data['max_loss']>data[f'VaR_{var}']]
+        ax.scatter(viols.index,viols['max_loss'], marker='o', c='r', s=10, zorder=10)
+        ax.set_title(f"{title}. VaR {var}% violations")
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel("Time")
+
+        plt.show()
+
+
+
+    num_days = (~data['VaR_95'].isna()).sum()
+    viols_95 = (data['loss']>data['VaR_95']).sum()
+    viols_99 = (data['loss']>data['VaR_99']).sum()
+
+    print(f"Violations 95%: {viols_95}, {100*viols_95/num_days:.2f}%")
+    print(f"Violations 99%: {viols_99}, {100*viols_99/num_days:.2f}%")
 
 def es_n(loss: np.ndarray, var: float):
     """
@@ -34,51 +70,80 @@ def es_n(loss: np.ndarray, var: float):
         return 0
     return loss[breach_mask].sum() / breach_mask.sum()
 
-model = arch_model(train['loss'].dropna(),
+split = dt.datetime(2021, 11, 26)
+def get_q_data():
+    df = pd.read_csv('QRM-2022-cw2-data.csv')
+    df['Date'] = pd.to_datetime(df['Date'])
+    df.sort_values(by='Date', ascending=True)
+    df.set_index('Date')
+    df['logreturn'] = np.log(1 + df['TSLA'].pct_change())
+    df['loss'] = -100 * df['logreturn']
+    df['max_loss'] = df['loss'].apply(lambda x: np.max([x,0]))
+    return df.set_index('Date')
+
+def get_training_test_data(df, dt):
+    df_training = df[:dt]
+    df_test = df[dt:]
+
+    return [df_training, df_test]
+
+df = get_q_data()
+[train, test] = get_training_test_data(df, split)
+model = arch_model(df['loss'].dropna(),
                     mean='constant', 
                     vol='GARCH', 
                     p=1, q=1, rescale=True, dist='normal')
 
-model_fit = model.fit(update_freq=-1, disp=0)
-forecasts = model_fit.forecast(horizon=len(test), reindex=False)
-test['normal_mean'] = forecasts.mean.T.values
-test['normal_variance'] = forecasts.variance.T.values
-ecdf = sm.distributions.ECDF(model_fit.std_resid)
-print(test)
+model_fit = model.fit(update_freq=-1, disp=0, last_obs=split)
+alpha_0 = model_fit.params['omega']
+alpha_1 = model_fit.params['alpha[1]']
+beta_1 = model_fit.params['beta[1]']
+print(alpha_0)
+print(alpha_1)
+print(beta_1)
+train['Standardised residuals'] = model_fit.std_resid
+print(df)
+forecasts = model_fit.forecast(horizon=1, start=split ,reindex=False)
+test['normal_mean'] = forecasts.mean.T.values[0]
+test['normal_variance'] = forecasts.variance.T.values[0]
 
-def VaR_ES_normal(df, model_fit, alpha):
-    q = np.quantile(model_fit.std_resid.values, alpha)
-    std = np.sqrt(df['normal_variance'])
-    value_at_risk = df['normal_mean'] + q * std
-    df['normal_var_' + str(alpha)] = value_at_risk
+df['Standardised residuals'] = train['Standardised residuals'].append(pd.Series([0 for x in range(len(test))]))
+df['normal_mean'] = pd.Series([0 for x in range(len(train))]).append(test['normal_mean'])
+df['normal_variance'] = pd.Series([0 for x in range(len(train))]).append(test['normal_variance'])
+#forecasts.variance[split:].plot()
+#plt.show()
+print(forecasts.variance.T.values[0])
+print(df)
 
-    res_exp_sh = es_n(model_fit.std_resid, q)
-    exp_sh = df['normal_mean'] + (df['normal_variance']**0.5)*res_exp_sh
-    df['normal_es_' + str(alpha)] = exp_sh
+VaR_95 = [0 for x in range(len(train))]
+VaR_99 = [0 for x in range(len(train))]
+ES_95 = [0 for x in range(len(train))]
+ES_99 = [0 for x in range(len(train))]
 
-    return df
+n = 500
+for i in range(len(test) - 1):
+    st = i + len(train)
+    q_95 = np.quantile(df['Standardised residuals'][st - n:st].dropna(), 0.95)
+    q_99 = np.quantile(df['Standardised residuals'][st - n:st].dropna(), 0.99)
 
-VaR_ES_normal(test, model_fit, 0.95)
-VaR_ES_normal(test, model_fit, 0.99)
-print(test)
-print_viols_and_plot_normal(test, 'A')
+    variance = alpha_0 + alpha_1 * df['loss'][st]**2 + beta_1*df['normal_variance'][st - 1]
+    df['normal_variance'][st] = variance
+    new_std_resid = (df['loss'][st] - df['normal_mean'][st]) / df['normal_variance'][st]
+    df['Standardised residuals'][st] = new_std_resid
+    VaR_95.append(df['normal_mean'][st] + (df['normal_variance'][st]**0.5 * q_95))
+    VaR_99.append(df['normal_mean'][st] + (df['normal_variance'][st]**0.5 * q_99))
 
-def VaR_ES_GPD(df, alpha, u, xi, beta):
-    q = u + ((beta/xi) * ((((1-alpha)/(1-ecdf(u)))**-xi) - 1))
-    value_at_risk = df['normal_mean'] + (df['normal_variance']**0.5)*q
-    df['GPD_var_' + str(alpha)] = value_at_risk
+    res_exp_sh_95 = es_n(df['Standardised residuals'][st - n:st].dropna(), q_95)
+    res_exp_sh_99 = es_n(df['Standardised residuals'][st - n:st].dropna(), q_99)
 
-    p = (q + beta-(xi*u))/(1-xi)
-    es = df['normal_mean'] + (df['normal_variance']**0.5)*p
-    df['GPD_es_' + str(alpha)] = es
+    exp_sh_95 = df['normal_mean'][st] + (df['normal_variance'][st]**0.5)*res_exp_sh_95
+    exp_sh_99 = df['normal_mean'][st] + (df['normal_variance'][st]**0.5)*res_exp_sh_99
+    ES_95.append(exp_sh_95)
+    ES_99.append(exp_sh_99)
 
-    return df
-
-xi = sol.x[0]
-beta = sol.x[1]
-print(xi)
-print(beta)
-VaR_ES_GPD(test, 0.95, u, xi, beta)
-VaR_ES_GPD(test, 0.99, u, xi, beta)
-print(test)
-print_viols_and_plot_GPD(test, 'B')
+df['VaR_95'] = VaR_95
+df['VaR_99'] = VaR_99
+df['ES_95'] = ES_95
+df['ES_99'] = ES_99
+print(df)
+print_viols_and_plot_normal(df, 'A')
