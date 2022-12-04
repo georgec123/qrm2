@@ -128,7 +128,7 @@ for i in range(len(test) - 1):
 
     variance = alpha_0 + alpha_1 * df['loss'][st]**2 + beta_1*df['normal_variance'][st - 1]
     df['normal_variance'][st] = variance
-    new_std_resid = (df['loss'][st] - df['normal_mean'][st]) / df['normal_variance'][st]
+    new_std_resid = (df['loss'][st] - df['normal_mean'][st]) / df['normal_variance'][st]**0.5
     df['Standardised residuals'][st] = new_std_resid
     VaR_95.append(df['normal_mean'][st] + (df['normal_variance'][st]**0.5 * q_95))
     VaR_99.append(df['normal_mean'][st] + (df['normal_variance'][st]**0.5 * q_99))
