@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt 
-from statsmodels.tsa.stattools import acf
 import statsmodels.api as sm
 import pandas as pd
 import numpy as np
