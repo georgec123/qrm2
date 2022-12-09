@@ -55,10 +55,10 @@ def fit_gpd(dist: pd.Series, u: float ) -> Tuple[float, float]:
     """
     excess_dist = dist[dist>u] - u
 
-    bnds = ((0.1,30), (0,30))
+    bnds = ((0.001,30), (0,30))
 
     res = minimize(fun = lambda theta: -1*LL_GPD(theta[0], theta[1], ys=excess_dist),
-        x0 = (10,10),
+        x0 = (1,1),
         method='SLSQP',
         bounds=bnds,
         options={'disp': False})
