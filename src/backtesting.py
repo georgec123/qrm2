@@ -4,6 +4,7 @@ import pandas as pd
 
 from scipy.optimize import minimize
 from scipy.stats.distributions import chi2
+import matplotlib.dates as mdates
 
 from typing import Tuple
 
@@ -99,6 +100,9 @@ def print_viols_and_plot(df: pd.DataFrame, title: str, q: str):
 
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
+
+    months = mdates.MonthLocator((1,4,7,10))
+    ax.xaxis.set_minor_locator(months)
     
     ax.xaxis.tick_bottom()
     ax.yaxis.tick_left()
